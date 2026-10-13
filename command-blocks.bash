@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Experimental Command Blocks v0.14.
+# Experimental Command Blocks v0.15.0.
 # Run in a temporary interactive Bash session.
 
 HISTFILE=/dev/null bash --noprofile --rcfile /dev/fd/3 -i 3<<'CBRC'
-# Command Blocks TEST v0.14
+# Command Blocks v0.15.0
 
 declare -A CB_MARKER=()
 
@@ -16,6 +16,8 @@ CB_GAP_LINES=0
 CB_PASTING=0
 CB_STOP_MODE=0
 CB_BATCH_TEXT=
+CB_BATCH_READY=0
+CB_BATCH_ACTIVE=0
 
 shopt -s checkwinsize promptvars
 bind 'set enable-bracketed-paste off'
@@ -97,8 +99,32 @@ _cb_prepare_batch() {
     fi
 
     CB_BATCH_TEXT="$READLINE_LINE"
-    READLINE_LINE='_cb_run_batch'
-    READLINE_POINT=${#READLINE_LINE}
+    CB_BATCH_READY=1
+    READLINE_LINE=
+    READLINE_POINT=0
+}
+
+_cb_print_batch_input() {
+    local script="$1"
+    local line
+    local first=1
+
+    # Remove the temporary empty Readline prompt.
+    printf '\033[2A\r\033[2K\033[1B\r\033[2K\033[1A\r'
+
+    # Restore the full Command Blocks header.
+    printf '\033[95m┌─  %s\033[0m%s\n' "$CB_USER" "$CB_REST"
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        if (( first )); then
+            printf '\033[95m│\033[0m ❯ %s\n' "$line"
+            first=0
+        else
+            printf '\033[95m│\033[0m   %s\n' "$line"
+        fi
+    done <<< "$script"
+
+    printf '\033[95m├────────────────────────────────────────\033[0m\n'
 }
 
 _cb_run_batch() {
@@ -106,15 +132,21 @@ _cb_run_batch() {
     local rc
 
     CB_BATCH_TEXT=
+    CB_BATCH_READY=0
+    CB_STARTED="$EPOCHREALTIME"
+    CB_BATCH_ACTIVE=1
 
-    printf '\033[90m[STOP MODE] Executing pasted batch:\033[0m\n'
-    printf '%s\n' "$script"
-    printf '\033[95m────────────────────────────────────────\033[0m\n'
+    printf '\033[?2004l'
+    _cb_print_batch_input "$script"
+
+    # Parent-shell controls cannot change parent state from child Bash.
+    local child_prelude=$'cb() { printf "cb stop: run this separately at the Command Blocks prompt (outside a pasted batch).\\n" >&2; return 2; }\n'
 
     bash --noprofile --norc -e -o pipefail \
-        -c "$script" </dev/tty
+        -c "${child_prelude}${script}" </dev/tty
 
     rc=$?
+    CB_BATCH_ACTIVE=0
 
     if (( rc != 0 )); then
         printf '\033[91mBATCH STOPPED\033[0m'
@@ -198,6 +230,21 @@ _cb_update_header() {
 _cb_finish() {
     local rc=$?
 
+    if (( CB_BATCH_ACTIVE )); then
+        CB_BATCH_ACTIVE=0
+        CB_BATCH_READY=0
+        CB_BATCH_TEXT=
+
+        if (( rc == 130 )); then
+            printf '\033[91mBATCH INTERRUPTED\033[0m · exit 130\n'
+        else
+            printf '\033[91mBATCH INTERRUPTED\033[0m · exit %d\n' "$rc"
+        fi
+    elif (( CB_BATCH_READY )); then
+        _cb_run_batch
+        rc=$?
+    fi
+
     if (( CB_FIRST_PROMPT )); then
         CB_FIRST_PROMPT=0
         _cb_update_header
@@ -272,7 +319,7 @@ PS2='\[\e[90m\]│ … \[\e[0m\]'
 
 trap 'printf "\033[?2004l"' EXIT
 
-printf '\n\033[95mCommand Blocks TEST v0.14 activated\033[0m\n'
+printf '\n\033[95mCommand Blocks v0.15.0 activated\033[0m\n'
 printf 'Accent: username + frame only.\n'
 printf 'Path, Git branch and time: neutral text.\n'
 printf 'Status badges: enlarged.\n'
