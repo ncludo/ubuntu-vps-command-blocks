@@ -1,6 +1,6 @@
 # Ubuntu VPS Command Blocks
 
-Experimental interactive Bash prompt with visual command boundaries, execution status, timing, and optional fail-fast batch execution.
+Experimental interactive Bash prompt with visual command boundaries, execution status, timing, and independently configurable batch grouping and stop-on-error behavior.
 
 Built for Ubuntu VPS administration over SSH.
 
@@ -10,16 +10,16 @@ Built for Ubuntu VPS administration over SSH.
 
 ## Features
 
-- Visual command blocks with clear input/output boundaries
+- Visual command blocks with input/output boundaries
 - Exit codes and execution duration
 - Git branch and working directory in the prompt
 - ANSI accent color controlled by the terminal palette
 - Manual spacing using empty Enter or `cbgap`
-- Separate command blocks during normal multiline paste
-- Optional fail-fast execution of multiline pasted batches
-- One input/output separator and one overall status per batch
-- Interrupt reporting for batches cancelled with Ctrl+C
-- Temporary shell session without modifying Bash configuration
+- Independent batch grouping and stop-on-error settings
+- Four combinations of execution behavior
+- Fail-fast execution isolated from the interactive shell
+- Interrupt reporting and recovery
+- Temporary shell without modifying Bash configuration
 
 ## Quick start
 
@@ -35,41 +35,88 @@ Press `Ctrl+D` inside Command Blocks to return to the parent shell. Do not use `
 
 | Command | Description |
 | --- | --- |
+| `cb status` | Show both current modes |
+| `cb batch separate` | Display separate command blocks |
+| `cb batch grouped` | Display one block for a pasted batch |
+| `cb batch status` | Show the batch mode |
+| `cb stop on` | Stop on an unhandled batch failure |
+| `cb stop off` | Continue after errors |
+| `cb stop status` | Show the stop mode |
 | `cbgap N` | Add 1–15 blank lines between command groups |
-| `cb stop on` | Enable fail-fast execution for multiline pasted batches |
-| `cb stop off` | Restore normal sequential paste behavior |
-| `cb stop status` | Show the current stop mode |
 
-Stop Mode is disabled by default.
+Default: **Separate + Stop OFF**.
 
-## Stop Mode
+Run mode-control commands separately at the interactive prompt.
 
-When enabled, multiline pasted input is collected for review. Press Enter to execute the collected batch.
+## Execution modes
 
-The batch runs in a separate Bash process using `-e` and `pipefail`.
+Batch grouping and stop-on-error behavior are independent.
 
-An unhandled failure stops the remaining commands, subject to Bash's standard `errexit` semantics. The parent interactive shell remains available.
+| Batch mode | Stop OFF | Stop ON |
+| --- | --- | --- |
+| Separate | Individual blocks, continue | Individual blocks, fail-fast |
+| Grouped | One block, continue | One block, fail-fast |
 
-The original pasted commands are displayed inside one Command Blocks frame. The batch has one separator, one overall exit code, and one execution timer.
+These settings primarily control multiline pasted input.
 
-Ctrl+C interruption is reported with exit code 130 in the tested scenario.
+### Separate + Stop OFF
 
-Run `cb stop on`, `cb stop off`, and `cb stop status` separately at the interactive prompt. These controls cannot change the parent shell's state from inside a child batch.
+Normal interactive Bash execution.
 
-Changes to variables, functions, exports, and the working directory inside a batch do not propagate to the parent shell.
+Each completed command receives its own frame, exit code, and timer.
 
-Stop Mode is not transactional. Commands completed before a failure are not rolled back.
+A failure does not automatically cancel subsequent pasted commands.
+
+### Separate + Stop ON
+
+A multiline paste is collected and executed in a child Bash.
+
+The input is divided into complete top-level Bash constructs. Each construct receives its own frame, status, and timer.
+
+For example, `if`, `for`, pipelines, and heredocs can be displayed as complete blocks rather than individual internal commands.
+
+Execution stops on an unhandled failure, subject to Bash `errexit` and `pipefail` semantics.
+
+### Grouped + Stop OFF
+
+A multiline paste runs in a child Bash without fail-fast enabled.
+
+The entire input receives one frame, one final exit code, and one execution timer.
+
+An earlier failure may be followed by successful commands. The final status reflects the overall shell execution result.
+
+### Grouped + Stop ON
+
+A multiline paste runs in a child Bash with `-e` and `pipefail`.
+
+The entire input receives one frame, one final exit code, and one execution timer.
+
+Unhandled failures stop the remaining commands.
+
+## Important behavior
+
+Stop Mode does not provide transactional rollback. Commands completed before a failure are not undone.
+
+Bash `errexit` has exceptions for conditions, `&&`, `||`, pipelines, and other language constructs.
+
+Pasted batches executed in a child shell cannot change the parent shell's working directory, variables, or functions.
+
+Interactive input remains available inside supported child batches.
+
+Ctrl+C interrupts execution without intentionally terminating the parent SSH shell.
 
 ## Current limitations
 
-This remains an experimental prototype, not a production-ready shell configuration.
+This is an experimental prototype, not a production-ready shell.
 
-- Bash `errexit` does not stop on every nonzero status in every syntax context.
-- A child batch cannot change its parent shell's environment.
-- Individual commands inside a batch do not receive separate status badges.
-- Terminal-specific paste and redraw handling require further compatibility testing.
-- No persistent installation or automatic shell activation is provided yet.
+- Top-level command splitting is based on incremental Bash syntax checks.
+- Complex dynamic constructs such as `eval` and `source` are not fully validated.
+- Custom traps, background jobs, and unusual shell control flow need further testing.
+- Compound commands receive one overall status, not individual internal statuses.
+- Terminal-specific paste and redraw behavior may differ between SSH clients.
+- Compatibility with other Bash versions is not established.
 - Command history is disabled in the temporary test shell.
+- Persistent installation, automatic activation, and rollback are not implemented.
 
 ## Tested environment
 
@@ -79,20 +126,23 @@ This remains an experimental prototype, not a production-ready shell configurati
 
 Tested scenarios include:
 
-- Normal sequential and large multiline paste
-- Manual spacing and `cbgap`
-- Exit status reporting and execution timing
+- All four Batch/Stop combinations
+- Multiline paste with and without failures
+- Sequential execution and fail-fast interruption
+- Pipelines with `pipefail`
+- Conditional commands and handled failures
+- `if/else` and `for`
+- Heredoc with blank lines
+- Interactive `read`
+- Command substitution
+- Execution timing
+- Ctrl+C and interactive shell recovery
 - Git prompt information and terminal colors
-- Heredoc and interactive `read`
-- Stop Mode enabled and disabled
-- Fail-fast batches with and without errors
-- Ctrl+C interruption and recovery
-- Parent-shell control commands inside a child batch
 
-Compatibility with other terminals and shell environments has not yet been established.
+Compatibility beyond the tested environment is not guaranteed.
 
 ## Development status
 
-Current experimental version: **v0.15.0**.
+Current experimental version: **v0.16.0**.
 
-The next planned development area is persistent installation, shell activation/deactivation, and complete rollback.
+Persistent installation, activation/deactivation, and full rollback are planned for a future development stage.
