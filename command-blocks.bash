@@ -413,7 +413,7 @@ PS0='${CB_MARKER[${CB_STARTED:=$EPOCHREALTIME}]}'$'\033[?2004l\033[95m├──�
 
 PS1='\[\e[?2004h\]\[\e[95m\]┌─  ${CB_USER}\[\e[0m\]${CB_REST}\n\[\e[95m\]│\[\e[0m\] ❯ \[\eD\eD\e[2A\]'
 
-PS2='\[\e[90m\]│ … \[\e[0m\]'
+PS2='\[\e[95m\]│\[\e[90m\] … \[\e[0m\]'
 
 trap 'printf "\033[?2004l"' EXIT
 
