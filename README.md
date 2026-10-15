@@ -43,8 +43,9 @@ Press `Ctrl+D` inside Command Blocks to return to the parent shell. Do not use `
 | `cb stop off` | Continue after errors |
 | `cb stop status` | Show the stop mode |
 | `cbgap N` | Add 1–15 blank lines between command groups |
+| `cb border on/off/status` | Experimental output borders; default OFF |
 
-Default: **Separate + Stop OFF**.
+Default: **Separate + Stop OFF**, **Border OFF**.
 
 Run mode-control commands separately at the interactive prompt.
 
@@ -105,6 +106,20 @@ Interactive input remains available inside supported child batches.
 
 Ctrl+C interrupts execution without intentionally terminating the parent SSH shell.
 
+## Experimental output border
+
+`cb border on` prefixes output rows, including empty rows, with a magenta `│` and a space. `cb border off` restores the unfiltered command output path. `cb status` includes the border mode.
+
+The formatter processes display output, not the original bytes emitted by commands. Future `cb clip` must capture the original stdout/stderr before decoration, without CB frames or status text. Clipboard capture is not implemented here.
+
+**OPEN — MobaXterm normal mouse selection:** With borders enabled, copied text may include visible `│` characters or alignment spaces. Clean conventional mouse copying is NOT guaranteed. Border OFF is the default to preserve ordinary copying.
+
+**OPEN — interactive terminal echo:** Characters echoed directly by the TTY (for example, input to `read` and `^C`) bypass the stdout/stderr formatter. Their border is not yet guaranteed. Do not modify terminal echo globally to solve this.
+
+Batch completion, failure and interruption notices receive a border prefix when Border ON; these notices are CB metadata, not command stdout/stderr.
+
+Border ON redirects stdout/stderr through a Python 3 formatter. While enabled it also uses Bash functrace to cover subshell commands; Border OFF restores the original functrace setting. Compound subshells use an EXIT handler to drain the formatter; custom traps and nested shell behavior need further testing. TTY-aware and full-screen programs, interactive input echo, unusual ANSI cursor controls, background jobs and terminal auto-wrapping may behave differently. Use `cb border off` for these cases. A border on every physical auto-wrapped row is not yet guaranteed.
+
 ## Current limitations
 
 This is an experimental prototype, not a production-ready shell.
@@ -143,6 +158,6 @@ Compatibility beyond the tested environment is not guaranteed.
 
 ## Development status
 
-Current experimental version: **v0.16.0**.
+Current experimental version: **v0.17.0-dev**.
 
 Persistent installation, activation/deactivation, and full rollback are planned for a future development stage.
