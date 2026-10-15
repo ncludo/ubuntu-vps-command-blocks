@@ -1,15 +1,40 @@
 #!/usr/bin/env bash
 
-# Experimental Command Blocks v0.17.0-dev.
+# Experimental Command Blocks v0.18.0-dev.
 # Run in a temporary interactive Bash session.
+
+CB_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CB_PROFILE_NAME=default
+if (( $# )); then
+    if (( $# != 2 )) || [[ "$1" != --profile ]] || [[ "$2" != default && "$2" != extended ]]; then
+        printf 'Usage: bash command-blocks.bash [--profile default|extended]\n' >&2
+        exit 2
+    fi
+    CB_PROFILE_NAME="$2"
+fi
+CB_PROFILE_FILE="$CB_HOME/profiles/$CB_PROFILE_NAME.conf"
+if [[ ! -f "$CB_PROFILE_FILE" ]]; then
+    printf 'Command Blocks: missing profile %s\n' "$CB_PROFILE_FILE" >&2
+    exit 2
+fi
+# Profiles are trusted source-controlled code, like the Bash entrypoint.
+source "$CB_PROFILE_FILE"
+case ${CB_DEFAULT_BATCH:-} in separate|grouped) ;; *) echo 'Invalid profile: batch' >&2; exit 2;; esac
+case ${CB_DEFAULT_STOP:-} in on|off) ;; *) echo 'Invalid profile: stop' >&2; exit 2;; esac
+case ${CB_DEFAULT_BORDER:-} in on|off) ;; *) echo 'Invalid profile: border' >&2; exit 2;; esac
+case ${CB_DEFAULT_CLIP:-} in on|off) ;; *) echo 'Invalid profile: clip' >&2; exit 2;; esac
 
 CB_BORDER_FILTER_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/cb-border-filter.py"
 if [[ ! -f "$CB_BORDER_FILTER_PATH" ]] || ! command -v python3 >/dev/null 2>&1; then
     printf 'Command Blocks: border helper/python3 missing.\n' >&2
     exit 2
 fi
-HISTFILE=/dev/null CB_BORDER_FILTER_PATH="$CB_BORDER_FILTER_PATH" bash --noprofile --rcfile /dev/fd/3 -i 3<<'CBRC'
-# Command Blocks v0.17.0-dev
+HISTFILE=/dev/null CB_BORDER_FILTER_PATH="$CB_BORDER_FILTER_PATH" \
+    CB_DEFAULT_BATCH="$CB_DEFAULT_BATCH" CB_DEFAULT_STOP="$CB_DEFAULT_STOP" \
+    CB_DEFAULT_BORDER="$CB_DEFAULT_BORDER" CB_DEFAULT_CLIP="$CB_DEFAULT_CLIP" \
+    CB_PROFILE_NAME="$CB_PROFILE_NAME" \
+    bash --noprofile --rcfile /dev/fd/3 -i 3<<'CBRC'
+# Command Blocks v0.18.0-dev
 
 declare -A CB_MARKER=()
 
@@ -20,13 +45,19 @@ CB_REST=
 CB_GAP_LINES=0
 CB_PASTING=0
 CB_STOP_MODE=0
-CB_BATCH_MODE=separate
+[[ ${CB_DEFAULT_STOP:-off} == on ]] && CB_STOP_MODE=1
+CB_BATCH_MODE=${CB_DEFAULT_BATCH:-separate}
 CB_BATCH_TEXT=
 CB_BATCH_READY=0
 CB_BATCH_ACTIVE=0
 CB_BATCH_TRACE=0
 CB_STEP_SCRIPT=
 CB_BORDER_MODE=0
+[[ ${CB_DEFAULT_BORDER:-off} == on ]] && CB_BORDER_MODE=1
+CB_CLIP_MODE=0
+[[ ${CB_DEFAULT_CLIP:-off} == on ]] && CB_CLIP_MODE=1
+CB_CLIP_LIMIT=1048576
+CB_CAPTURE_FILE=
 CB_BORDER_ACTIVE=0
 CB_BORDER_PREPARE=
 CB_BORDER_INITIAL_FUNCTRACE=0
@@ -37,10 +68,18 @@ bind 'set enable-bracketed-paste off'
 
 _cb_border_begin ()
 {
-    (( CB_BORDER_MODE )) || return 0
+    (( CB_BORDER_MODE || CB_CLIP_MODE )) || return 0
     (( ! CB_BORDER_ACTIVE )) || return 0
+    local capture=''
+    if (( CB_CLIP_MODE )); then
+        capture=$(umask 077; mktemp "${TMPDIR:-/tmp}/cb-clip.XXXXXXXX") || {
+            printf 'CB CLIP: capture unavailable; running without clipboard.\n' >&2
+            capture=''
+        }
+    fi
+    CB_CAPTURE_FILE="$capture"
     exec {CB_BORDER_OUT_FD}>&1 {CB_BORDER_ERR_FD}>&2
-    exec > >(python3 -u "$CB_BORDER_FILTER_PATH") 2>&1
+    exec > >(python3 -u "$CB_BORDER_FILTER_PATH" "$CB_BORDER_MODE" "$capture" "$CB_CLIP_LIMIT") 2>&1
     CB_BORDER_PID=$!
     CB_BORDER_ACTIVE=1
     if (( BASH_SUBSHELL > 0 )); then
@@ -59,6 +98,21 @@ _cb_border_end ()
     wait "$guard" 2>/dev/null || :
     exec {CB_BORDER_OUT_FD}>&- {CB_BORDER_ERR_FD}>&-
     CB_BORDER_ACTIVE=0
+    local capture="${CB_CAPTURE_FILE:-}"
+    CB_CAPTURE_FILE=
+    if [[ -n "$capture" ]]; then
+        if [[ -s "$capture" ]]; then
+            if [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+                timeout 4s xclip -selection clipboard -in < "$capture" >/dev/null 2>&1 ||
+                    printf 'CB CLIP: Windows clipboard transfer failed.\n' >&2
+            else
+                printf 'CB CLIP: X11/xclip unavailable, clipboard unchanged.\n' >&2
+            fi
+        elif [[ ! -e "$capture" ]]; then
+            printf 'CB CLIP: output exceeded %s bytes, clipboard unchanged.\n' "$CB_CLIP_LIMIT" >&2
+        fi
+        rm -f -- "$capture"
+    fi
     return 0
 }
 _cb_border_debug ()
@@ -66,6 +120,7 @@ _cb_border_debug ()
     local frame
 
     [[ "$BASH_COMMAND" == _cb_finish ]] && return 0
+    [[ "$BASH_COMMAND" == cb || "$BASH_COMMAND" == cb\ * ]] && return 0
 
     for frame in "${FUNCNAME[@]:1}"; do
         case "$frame" in
@@ -74,7 +129,7 @@ _cb_border_debug ()
     done
 
     if [[ "${CB_BORDER_PREPARE:-}" == 1 ]] &&
-       (( CB_BORDER_MODE && ! CB_BORDER_ACTIVE )) &&
+       (( (CB_BORDER_MODE || CB_CLIP_MODE) && ! CB_BORDER_ACTIVE )) &&
        [[ -t 1 ]]; then
         _cb_border_begin
     fi
@@ -112,6 +167,23 @@ _cb_sync_bindings ()
         bind -x '"\e[201~":_cb_paste_end';
     fi
 }
+_cb_ui_printf ()
+{
+    # CB control messages are metadata: draw a border but never capture to clipboard.
+    local message line
+    printf -v message "$@" || return
+    if (( ! CB_BORDER_MODE )); then
+        printf '%s' "$message"
+        return 0
+    fi
+    while [[ "$message" == *$'\n'* ]]; do
+        line="${message%%$'\n'*}"
+        printf '\033[95m│\033[0m %s\n' "$line"
+        message="${message#*$'\n'}"
+    done
+    [[ -z "$message" ]] || printf '\033[95m│\033[0m %s' "$message"
+    return 0
+}
 cb ()
 {
     case "${1:-}" in
@@ -120,13 +192,13 @@ cb ()
                 separate | grouped)
                     CB_BATCH_MODE="$2";
                     _cb_sync_bindings;
-                    printf 'BATCH MODE: %s\n' "${CB_BATCH_MODE^^}"
+                    _cb_ui_printf 'BATCH MODE: %s\n' "${CB_BATCH_MODE^^}"
                 ;;
                 status)
-                    printf 'BATCH MODE: %s\n' "${CB_BATCH_MODE^^}"
+                    _cb_ui_printf 'BATCH MODE: %s\n' "${CB_BATCH_MODE^^}"
                 ;;
                 *)
-                    printf 'Usage: cb batch separate|grouped|status\n' 1>&2;
+                    _cb_ui_printf 'Usage: cb batch separate|grouped|status\n' 1>&2;
                     return 2
                 ;;
             esac
@@ -136,22 +208,22 @@ cb ()
                 on)
                     CB_STOP_MODE=1;
                     _cb_sync_bindings;
-                    printf '\033[93mSTOP MODE ON\033[0m\n'
+                    _cb_ui_printf '\033[93mSTOP MODE ON\033[0m\n'
                 ;;
                 off)
                     CB_STOP_MODE=0;
                     _cb_sync_bindings;
-                    printf '\033[92mSTOP MODE OFF\033[0m\n'
+                    _cb_ui_printf '\033[92mSTOP MODE OFF\033[0m\n'
                 ;;
                 status)
                     if (( CB_STOP_MODE )); then
-                        printf 'STOP MODE: ON\n';
+                        _cb_ui_printf 'STOP MODE: ON\n';
                     else
-                        printf 'STOP MODE: OFF\n';
+                        _cb_ui_printf 'STOP MODE: OFF\n';
                     fi
                 ;;
                 *)
-                    printf 'Usage: cb stop on|off|status\n' 1>&2;
+                    _cb_ui_printf 'Usage: cb stop on|off|status\n' 1>&2;
                     return 2
                 ;;
             esac
@@ -161,22 +233,47 @@ cb ()
                 on)
                     CB_BORDER_MODE=1;
                     set -T;
-                    printf 'OUTPUT BORDER: ON (experimental; selection may copy borders)\n'
+                    _cb_ui_printf 'OUTPUT BORDER: ON (experimental; selection may copy borders)\n'
                 ;;
                 off)
                     CB_BORDER_MODE=0;
-                    (( CB_BORDER_INITIAL_FUNCTRACE )) || set +T;
-                    printf 'OUTPUT BORDER: OFF\n'
+                    (( CB_BORDER_INITIAL_FUNCTRACE || CB_CLIP_MODE )) || set +T;
+                    _cb_ui_printf 'OUTPUT BORDER: OFF\n'
                 ;;
                 status)
                     if (( CB_BORDER_MODE )); then
-                        printf 'OUTPUT BORDER: ON (experimental)\n';
+                        _cb_ui_printf 'OUTPUT BORDER: ON (experimental)\n';
                     else
-                        printf 'OUTPUT BORDER: OFF\n';
+                        _cb_ui_printf 'OUTPUT BORDER: OFF\n';
                     fi
                 ;;
                 *)
-                    printf 'Usage: cb border on|off|status\n' >&2;
+                    _cb_ui_printf 'Usage: cb border on|off|status\n' >&2;
+                    return 2
+                ;;
+            esac
+        ;;
+        clip)
+            case "${2:-status}" in
+                on)
+                    CB_CLIP_MODE=1;
+                    set -T;
+                    _cb_ui_printf 'CLIP MODE: ON (stdout/stderr; up to 1 MiB)\n'
+                ;;
+                off)
+                    CB_CLIP_MODE=0;
+                    (( CB_BORDER_INITIAL_FUNCTRACE || CB_BORDER_MODE )) || set +T;
+                    _cb_ui_printf 'CLIP MODE: OFF\n'
+                ;;
+                status)
+                    if (( CB_CLIP_MODE )); then
+                        _cb_ui_printf 'CLIP MODE: ON\n';
+                    else
+                        _cb_ui_printf 'CLIP MODE: OFF\n';
+                    fi
+                ;;
+                *)
+                    _cb_ui_printf 'Usage: cb clip on|off|status\n' >&2;
                     return 2
                 ;;
             esac
@@ -184,10 +281,11 @@ cb ()
         status)
             cb batch status;
             cb stop status;
-            cb border status
+            cb border status;
+            cb clip status
         ;;
         *)
-            printf 'Usage: cb batch separate|grouped|status | cb stop on|off|status | cb border on|off|status | cb status\n' 1>&2;
+            _cb_ui_printf 'Usage: cb batch separate|grouped|status | cb stop on|off|status | cb border on|off|status | cb clip on|off|status | cb status\n' 1>&2;
             return 2
         ;;
     esac
@@ -357,6 +455,9 @@ TRACE
     CB_STEP_SCRIPT+="$(declare -f _cb_border_begin)"$'\n';
     CB_STEP_SCRIPT+="$(declare -f _cb_border_end)"$'\n';
     CB_STEP_SCRIPT+="CB_BORDER_MODE=$CB_BORDER_MODE"$'\n';
+    CB_STEP_SCRIPT+="CB_CLIP_MODE=$CB_CLIP_MODE"$'\n';
+    CB_STEP_SCRIPT+="CB_CLIP_LIMIT=$CB_CLIP_LIMIT"$'\n';
+    CB_STEP_SCRIPT+="CB_CAPTURE_FILE="$'\n';
     CB_STEP_SCRIPT+="CB_BORDER_ACTIVE=0"$'\n';
     CB_STEP_SCRIPT+="$prelude"'
 ';
@@ -508,6 +609,8 @@ trap '_cb_border_debug' DEBUG
 
 bind -x '"\e[200~":_cb_paste_begin'
 bind -x '"\e[201~":_cb_paste_end'
+_cb_sync_bindings
+(( CB_BORDER_MODE || CB_CLIP_MODE )) && set -T
 
 PROMPT_COMMAND=_cb_finish
 
@@ -517,10 +620,25 @@ PS1='\[\e[?2004h\]\[\e[95m\]┌─  ${CB_USER}\[\e[0m\]${CB_REST}\n\[\e[95m\]│
 
 PS2='\[\e[95m\]│\[\e[90m\] … \[\e[0m\]'
 
-trap 'printf "\033[?2004l"' EXIT
+_cb_exit_cleanup ()
+{
+    # Drain the output filter before returning control to the parent shell.
+    # An explicit exit must not replace the user's clipboard.
+    local pending_capture="${CB_CAPTURE_FILE:-}"
+    CB_CAPTURE_FILE=
+    _cb_border_end
+    if [[ -n "$pending_capture" ]]; then
+        rm -f -- "$pending_capture"
+    fi
+    printf '\033[?2004l'
+}
+trap '_cb_exit_cleanup' EXIT
 
-printf '\n\033[95mCommand Blocks v0.17.0-dev activated\033[0m\n'
-printf 'Default: SEPARATE + Stop OFF + Border OFF.\n'
-printf 'Use cb batch separate|grouped, cb stop on|off, cb border on|off, cb status.\n'
-printf 'Temporary shell; no configuration files changed.\n\n'
+printf '\n\033[95mCommand Blocks v0.18.0-dev activated\033[0m\n'
+printf 'Profile: %s | Batch %s | Stop %s | Border %s | Clip %s\n' \
+    "$CB_PROFILE_NAME" "${CB_BATCH_MODE^^}" \
+    "$([[ "$CB_STOP_MODE" == 1 ]] && echo ON || echo OFF)" \
+    "$([[ "$CB_BORDER_MODE" == 1 ]] && echo ON || echo OFF)" \
+    "$([[ "$CB_CLIP_MODE" == 1 ]] && echo ON || echo OFF)"
+printf 'Use cb batch|stop|border|clip|status. Temporary shell.\n\n'
 CBRC

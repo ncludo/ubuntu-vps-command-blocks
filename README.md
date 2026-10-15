@@ -35,7 +35,7 @@ Press `Ctrl+D` inside Command Blocks to return to the parent shell. Do not use `
 
 | Command | Description |
 | --- | --- |
-| `cb status` | Show both current modes |
+| `cb status` | Show all four mode settings |
 | `cb batch separate` | Display separate command blocks |
 | `cb batch grouped` | Display one block for a pasted batch |
 | `cb batch status` | Show the batch mode |
@@ -44,6 +44,7 @@ Press `Ctrl+D` inside Command Blocks to return to the parent shell. Do not use `
 | `cb stop status` | Show the stop mode |
 | `cbgap N` | Add 1–15 blank lines between command groups |
 | `cb border on/off/status` | Experimental output borders; default OFF |
+| `cb clip on/off/status` | Copy command output via X11; default OFF |
 
 Default: **Separate + Stop OFF**, **Border OFF**.
 
@@ -110,7 +111,7 @@ Ctrl+C interrupts execution without intentionally terminating the parent SSH she
 
 `cb border on` prefixes output rows, including empty rows, with a magenta `│` and a space. `cb border off` restores the unfiltered command output path. `cb status` includes the border mode.
 
-The formatter processes display output, not the original bytes emitted by commands. Future `cb clip` must capture the original stdout/stderr before decoration, without CB frames or status text. Clipboard capture is not implemented here.
+The formatter captures raw stdout/stderr before drawing borders. Optional `cb clip` forwards them via X11 without CB frames or status messages.
 
 **OPEN — MobaXterm normal mouse selection:** With borders enabled, copied text may include visible `│` characters or alignment spaces. Clean conventional mouse copying is NOT guaranteed. Border OFF is the default to preserve ordinary copying.
 
@@ -131,7 +132,7 @@ This is an experimental prototype, not a production-ready shell.
 - Terminal-specific paste and redraw behavior may differ between SSH clients.
 - Compatibility with other Bash versions is not established.
 - Command history is disabled in the temporary test shell.
-- Persistent installation, automatic activation, and rollback are not implemented.
+- SSH autostart is opt-in per Unix user; full installation and interactive on/off remain future work.
 
 ## Tested environment
 
@@ -158,6 +159,27 @@ Compatibility beyond the tested environment is not guaranteed.
 
 ## Development status
 
-Current experimental version: **v0.17.0-dev**.
+Current experimental version: **v0.18.0-dev**.
 
-Persistent installation, activation/deactivation, and full rollback are planned for a future development stage.
+Full installation, interactive activation/deactivation and rollback are planned for a future development stage.
+
+## Profiles, clipboard and SSH auto-start (v0.18.0-dev)
+
+Profiles tracked in Git: `profiles/default.conf` (Separate, Stop OFF, Border OFF, Clip OFF)
+and `profiles/extended.conf` (Grouped, Stop ON, Border ON, Clip ON). They
+contain no credentials or private paths. Select with `bash command-blocks.bash --profile extended`.
+
+`cb clip on|off|status` captures merged command stdout/stderr before CB
+decoration via X11 and `xclip`, capped at 1 MiB per completed command or grouped
+batch. Empty output, capture failures and oversize output leave the clipboard
+unchanged. In Separate mode each nonempty step updates the clipboard; in
+Grouped mode the whole batch is copied. Clipboard data can be sensitive;
+`extended` intentionally opts in. Interactive TTY echo is not captured.
+
+Enable interactive SSH auto-start for the current Unix user with
+`./install.sh --profile default` or `./install.sh --profile extended`.
+Remove with `./install.sh --remove yes`. The installer modifies only a
+marked section of `~/.bashrc` and validates Bash syntax before replacement;
+no global `/etc` settings are changed. It does not affect noninteractive SSH,
+scp or sftp. Re-run the installer after cloning onto a fresh VPS. Keep the
+current SSH session open while testing a new login.
